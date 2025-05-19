@@ -1,10 +1,10 @@
-module github.com/jasonlvhit/gocron/example
+module github.com/rajeshell/gocron/example
 
 go 1.16
 
-replace github.com/jasonlvhit/gocron => ../
+replace github.com/rajeshell/gocron => ../
 
 require (
 	github.com/go-redis/redis v8.11.2
-	github.com/jasonlvhit/gocron v0.0.0-00010101000000-000000000000
+	github.com/rajeshell/gocron v0.0.0-00010101000000-000000000000
 )
