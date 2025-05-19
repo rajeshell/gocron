@@ -1,5 +1,5 @@
 ### Note from current maintainers:
-A currently maintained fork of this project has been migrated to https://github.com/go-co-op/gocron
+A currently maintained fork of this project has been migrated to https://github.com/rajeshell/gocron
 
 Disclaimer: we (the maintainers) tried, with no luck, to get in contact with Jason (the repository owner) in order to add new maintainers or leave the project within an organization. Unfortunately, he hasn't replied for months now (March, 2020). 
 

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/go-redis/redis"
-	"github.com/jasonlvhit/gocron"
+	"github.com/rajeshell/gocron"
 )
 
 // Run a Redis instance with Docker: docker run --rm -tid -p 6379:6379 redis:alpine
