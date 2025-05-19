@@ -1,4 +1,4 @@
-module github.com/rajeshell/gocron.git
+module github.com/rajeshell/gocron
 
 go 1.24
 
