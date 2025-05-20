@@ -56,6 +56,7 @@ const (
 	hours
 	days
 	weeks
+	months
 )
 
 var (

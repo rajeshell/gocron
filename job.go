@@ -31,6 +31,8 @@ type Job struct {
 	fparams  map[string][]interface{} // Map for function and  params of function
 	lock     bool                     // lock the job from running at same time form multiple instances
 	tags     []string                 // allow the user to tag jobs with certain labels
+	monthDay int                      // Specific day of the month to run on (1-31)
+	isLastDay bool                    // Whether to run on the last day of the month
 }
 
 // NewJob creates a new job with the time interval.
@@ -91,7 +93,52 @@ func (j *Job) Do(jobFun interface{}, params ...interface{}) error {
 	j.jobFunc = fname
 
 	now := time.Now().In(j.loc)
-	if !j.nextRun.After(now) {
+	if j.unit == months {
+		// For monthly jobs, we want to schedule the first run in the current month
+		// if the target day hasn't passed yet
+		if j.isLastDay {
+			lastDay := time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+			j.nextRun = time.Date(now.Year(), now.Month(), lastDay, 0, 0, 0, 0, j.loc)
+		} else if j.monthDay > 0 {
+			lastDay := time.Date(now.Year(), now.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+			day := j.monthDay
+			if day > lastDay {
+				day = lastDay
+			}
+			j.nextRun = time.Date(now.Year(), now.Month(), day, 0, 0, 0, 0, j.loc)
+		} else {
+			j.nextRun = now.AddDate(0, int(j.interval), 0)
+		}
+
+		// Add the atTime if specified
+		if j.atTime != 0 {
+			j.nextRun = j.roundToMidnight(j.nextRun).Add(j.atTime)
+		}
+
+		// If the next run time is in the past, schedule for next month
+		if j.nextRun.Before(now) {
+			if j.isLastDay {
+				nextMonth := now.AddDate(0, int(j.interval), 0)
+				lastDay := time.Date(nextMonth.Year(), nextMonth.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+				j.nextRun = time.Date(nextMonth.Year(), nextMonth.Month(), lastDay, 0, 0, 0, 0, j.loc)
+			} else if j.monthDay > 0 {
+				nextMonth := now.AddDate(0, int(j.interval), 0)
+				lastDay := time.Date(nextMonth.Year(), nextMonth.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+				day := j.monthDay
+				if day > lastDay {
+					day = lastDay
+				}
+				j.nextRun = time.Date(nextMonth.Year(), nextMonth.Month(), day, 0, 0, 0, 0, j.loc)
+			} else {
+				j.nextRun = now.AddDate(0, int(j.interval), 0)
+			}
+
+			// Add the atTime if specified
+			if j.atTime != 0 {
+				j.nextRun = j.roundToMidnight(j.nextRun).Add(j.atTime)
+			}
+		}
+	} else if !j.nextRun.After(now) {
 		j.scheduleNextRun()
 	}
 
@@ -167,6 +214,53 @@ func (j *Job) Tags() []string {
 	return j.tags
 }
 
+// Month sets the unit with months
+func (j *Job) Month() *Job {
+	if j.interval != 1 {
+		j.err = fmt.Errorf("interval-based monthly scheduling is not supported; use Every(1).Month() only")
+		return j
+	}
+	j.unit = months
+	return j
+}
+
+// DayOfMonth sets the specific day of the month to run on (1-31)
+func (j *Job) DayOfMonth(day int) *Job {
+	if day < 1 || day > 31 {
+		j.err = fmt.Errorf("invalid day of month: %d, must be between 1 and 31", day)
+		return j
+	}
+	if j.interval != 1 {
+		j.err = fmt.Errorf("interval-based monthly scheduling is not supported; use Every(1).DayOfMonth(%d) only", day)
+		return j
+	}
+	j.monthDay = day
+	j.unit = months
+	return j
+}
+
+// FirstDayOfMonth sets the job to run on the first day of each month
+func (j *Job) FirstDayOfMonth() *Job {
+	if j.interval != 1 {
+		j.err = fmt.Errorf("interval-based monthly scheduling is not supported; use Every(1).FirstDayOfMonth() only")
+		return j
+	}
+	j.monthDay = 1
+	j.unit = months
+	return j
+}
+
+// LastDayOfMonth sets the job to run on the last day of each month
+func (j *Job) LastDayOfMonth() *Job {
+	if j.interval != 1 {
+		j.err = fmt.Errorf("interval-based monthly scheduling is not supported; use Every(1).LastDayOfMonth() only")
+		return j
+	}
+	j.isLastDay = true
+	j.unit = months
+	return j
+}
+
 func (j *Job) periodDuration() (time.Duration, error) {
 	interval := time.Duration(j.interval)
 	var periodDuration time.Duration
@@ -182,6 +276,9 @@ func (j *Job) periodDuration() (time.Duration, error) {
 		periodDuration = interval * time.Hour * 24
 	case weeks:
 		periodDuration = interval * time.Hour * 24 * 7
+	case months:
+		// For months, we'll handle this in scheduleNextRun
+		periodDuration = interval * time.Hour * 24 * 30 // Approximate
 	default:
 		return 0, ErrPeriodNotSpecified
 	}
@@ -195,9 +292,57 @@ func (j *Job) roundToMidnight(t time.Time) time.Time {
 
 // scheduleNextRun Compute the instant when this job should run next
 func (j *Job) scheduleNextRun() error {
-	now := time.Now()
-	if j.lastRun == time.Unix(0, 0) {
-		j.lastRun = now
+	if j.err != nil {
+		return j.err
+	}
+
+	if j.unit == months {
+		base := j.lastRun.In(j.loc)
+		var nextRun time.Time
+		if j.isLastDay {
+			// Last day of current month
+			lastDay := time.Date(base.Year(), base.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+			candidate := time.Date(base.Year(), base.Month(), lastDay, 0, 0, 0, 0, j.loc)
+			if candidate.After(base) {
+				nextRun = candidate
+			} else {
+				// Move to next interval month
+				nextMonth := base.AddDate(0, int(j.interval), 0)
+				lastDay = time.Date(nextMonth.Year(), nextMonth.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+				nextRun = time.Date(nextMonth.Year(), nextMonth.Month(), lastDay, 0, 0, 0, 0, j.loc)
+			}
+		} else if j.monthDay > 0 {
+			// Specific day of current month
+			lastDay := time.Date(base.Year(), base.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+			day := j.monthDay
+			if day > lastDay {
+				day = lastDay
+			}
+			candidate := time.Date(base.Year(), base.Month(), day, 0, 0, 0, 0, j.loc)
+			if candidate.After(base) {
+				nextRun = candidate
+			} else {
+				// Move to next interval month
+				nextMonth := base.AddDate(0, int(j.interval), 0)
+				lastDay = time.Date(nextMonth.Year(), nextMonth.Month()+1, 0, 0, 0, 0, 0, j.loc).Day()
+				day = j.monthDay
+				if day > lastDay {
+					day = lastDay
+				}
+				nextRun = time.Date(nextMonth.Year(), nextMonth.Month(), day, 0, 0, 0, 0, j.loc)
+			}
+		} else {
+			// Default: same day next interval month
+			nextRun = base.AddDate(0, int(j.interval), 0)
+		}
+
+		// Add the atTime if specified
+		if j.atTime != 0 {
+			nextRun = j.roundToMidnight(nextRun).Add(j.atTime)
+		}
+
+		j.nextRun = nextRun
+		return nil
 	}
 
 	periodDuration, err := j.periodDuration()
@@ -222,7 +367,7 @@ func (j *Job) scheduleNextRun() error {
 	}
 
 	// advance to next possible schedule
-	for j.nextRun.Before(now) || j.nextRun.Before(j.lastRun) {
+	for j.nextRun.Before(j.lastRun) {
 		j.nextRun = j.nextRun.Add(periodDuration)
 	}
 
